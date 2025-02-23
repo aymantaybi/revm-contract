@@ -1,0 +1,68 @@
+use alloy::eips::BlockId;
+use alloy::network::Ethereum;
+use alloy::providers::ProviderBuilder;
+use alloy::providers::RootProvider;
+use alloy::providers::WsConnect;
+use alloy::pubsub::PubSubFrontend;
+use alloy::sol;
+use alloy::sol_types::SolCall;
+use alloy::transports::http::Client;
+use alloy::transports::http::Http;
+use revm::db::AlloyDB;
+use revm::db::CacheDB;
+use revm::primitives::address;
+use revm::primitives::TxKind;
+use revm::Evm;
+use revm_contract::{calls, contract};
+use std::sync::Arc;
+use IERC20::balanceOfCall;
+use IERC20::{allowanceCall, transferCall};
+
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    #[derive(Debug)]
+    IERC20,
+    "src/abi/IERC20.json"
+);
+
+type AlloyCacheDB = CacheDB<AlloyDB<Http<Client>, Ethereum, Arc<RootProvider<Http<Client>>>>>;
+
+type ExternalContexts = ();
+
+contract!(
+    #[calls(allowanceCall, transferCall, balanceOfCall)]
+    pub Erc20Contract<ExternalContexts, AlloyCacheDB>
+);
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let rpc_url = "http://localhost:8545";
+
+    let provider = ProviderBuilder::new().on_http(rpc_url.parse()?);
+
+    let provider = Arc::new(provider);
+
+    let db = AlloyDB::new(provider.clone(), BlockId::default()).unwrap();
+
+    let cache_db: AlloyCacheDB = CacheDB::new(db);
+
+    let mut evm: Evm<ExternalContexts, AlloyCacheDB> = Evm::builder().with_db(cache_db).build();
+
+    let address = address!("0b7007c13325c48911f73a2dad5fa5dcbf808adc");
+
+    //let contract = Erc20Contract::new(address, &mut evm);
+
+    let balance_of_call = balanceOfCall {
+        _owner: address!("c1eb47de5d549d45a871e32d9d082e7ac5d2e3ed"),
+    };
+
+    let tx = evm.tx_mut();
+
+    tx.data = balance_of_call.abi_encode().into();
+    tx.transact_to = TxKind::Call(address);
+
+    //contract.balance_of(balance_of_call);
+
+    Ok(())
+}
