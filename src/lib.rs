@@ -1,11 +1,6 @@
-use std::collections::HashMap;
-
-use alloy::sol_types::SolCall;
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use quote::quote;
-use revm::primitives::{Account, Address, ExecutionResult, ResultAndState, TxEnv};
-use revm_contract_types::{process_transact_result, CallOutput};
 use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input,
