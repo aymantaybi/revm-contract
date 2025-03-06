@@ -5,6 +5,7 @@ use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use quote::quote;
 use revm::primitives::{Account, Address, ExecutionResult, ResultAndState, TxEnv};
+use revm_contract_types::{process_transact_result, CallOutput};
 use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input,
@@ -13,8 +14,6 @@ use syn::{
     Attribute, GenericParam, Generics, Ident, ItemStruct, Lifetime, Token, Type, TypeParam,
     Visibility,
 };
-mod types;
-use crate::types::CallOutput;
 
 /// Procedural macro to generate the contract struct with injected lifetimes and two type parameters
 #[proc_macro]
@@ -43,22 +42,20 @@ pub fn contract(input: TokenStream) -> TokenStream {
     // Generate the struct definition with injected lifetimes and two type parameters
     let struct_def = quote! {
         #(#attrs)*
-        #vis struct #name<'b, 'a, #type_param1, #type_param2>
+        #vis struct #name<'a, #type_param1, #type_param2>
         where
-            #type_param2: revm::Database,
-            'a: 'b
+            #type_param2: revm::Database
         {
-            pub evm: &'b mut Evm<'a, #type_param1, #type_param2>,
+            pub evm: Option<Evm<'a, #type_param1, #type_param2>>,
             pub address: alloy::primitives::Address,
         }
 
-        impl<'b, 'a, #type_param1, #type_param2> #name<'b, 'a, #type_param1, #type_param2>
+        impl<'a, #type_param1, #type_param2> #name<'a, #type_param1, #type_param2>
         where
-            #type_param2: revm::Database,
-            'a: 'b
+            #type_param2: revm::Database
         {
 
-            pub fn new(address: alloy::primitives::Address, evm: &'b mut Evm<'a, #type_param1, #type_param2>) -> Self {
+            pub fn new(address: alloy::primitives::Address, evm: Option<Evm<'a, #type_param1, #type_param2>>) -> Self {
                 Self { address, evm }
             }
 
@@ -87,10 +84,10 @@ pub fn calls(attr: TokenStream, item: TokenStream) -> TokenStream {
     let (lifetimes, type_params) = extract_lifetimes_and_type_params(generics);
 
     // Ensure exactly two lifetimes are present
-    if lifetimes.len() != 2 {
+    if lifetimes.len() != 1 {
         return syn::Error::new(
             generics.span(),
-            "Expected exactly two lifetimes in the struct definition",
+            "Expected exactly one lifetime in the struct definition",
         )
         .to_compile_error()
         .into();
@@ -106,8 +103,7 @@ pub fn calls(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
-    let lifetime_b = &lifetimes[0];
-    let lifetime_a = &lifetimes[1];
+    let lifetime_a = &lifetimes[0];
     let type_param1 = &type_params[0];
     let type_param2 = &type_params[1];
 
@@ -131,19 +127,24 @@ pub fn calls(attr: TokenStream, item: TokenStream) -> TokenStream {
         let method = quote! {
 
             /// Note that the `tx_env` `data` & `transact_to` are provided by the implementation.
-            pub fn #method_name(&mut self, call: #parsed_type, tx_env: revm::primitives::TxEnv) -> revm::primitives::EVMResultGeneric<crate::types::CallOutput<#parsed_type>, #type_param2::Error> {
+            pub fn #method_name(&mut self, call: #parsed_type, tx_env: Option<revm::primitives::TxEnv>) -> revm::primitives::EVMResultGeneric<revm_contract_types::CallOutput<#parsed_type>, #type_param2::Error> {
 
-                let mut tx_env = tx_env;
+                let evm = self.evm.as_mut().expect("Calling method on a missing evm");
+
+                let mut tx_env = match tx_env {
+                    Some(v) => v,
+                    None => revm::primitives::TxEnv::default(),
+                };
 
                 tx_env.data = call.abi_encode().into();
                 tx_env.transact_to = revm::primitives::TxKind::Call(self.address);
 
-                let tx = self.evm.tx_mut();
+                let tx = evm.tx_mut();
                 *tx = tx_env;
 
-                let result_and_state = self.evm.transact()?;
+                let result_and_state = evm.transact()?;
 
-                Ok(types::process_transact_result(result_and_state))
+                Ok(revm_contract_types::process_transact_result(result_and_state))
             }
         };
 
@@ -151,14 +152,14 @@ pub fn calls(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     // Generate generic parameters for the impl block
-    let impl_generics = quote! { <#lifetime_b, #lifetime_a, #type_param1, #type_param2> };
+    let impl_generics = quote! { <#lifetime_a, #type_param1, #type_param2> };
 
     // Generate the impl block with lifetimes and type parameters
     let expanded = quote! {
         // Keep the original struct definition
         #input
 
-        impl #impl_generics #struct_name<#lifetime_b, #lifetime_a, #type_param1, #type_param2>
+        impl #impl_generics #struct_name<#lifetime_a, #type_param1, #type_param2>
         where
             #type_param2: revm::Database,
         {

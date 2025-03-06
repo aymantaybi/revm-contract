@@ -29,5 +29,8 @@ anyhow = "1.0.94"
 heck = "0.5.0"
 
 
+revm-contract-types = { git = "https://github.com/aymantaybi/revm-contract-types" }
+
+
 [lib]
 proc-macro = true

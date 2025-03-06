@@ -13,22 +13,20 @@ use alloy::transports::http::Http;
 use revm::db::AlloyDB;
 use revm::db::CacheDB;
 use revm::primitives::address;
+use revm::primitives::Address;
 use revm::primitives::TxEnv;
 use revm::primitives::TxKind;
 use revm::Evm;
 use revm_contract::{calls, contract};
 use std::sync::Arc;
-use IERC20::balanceOfCall;
-use IERC20::{allowanceCall, transferCall};
-
-mod types;
+use IERC20::{allowanceCall, balanceOfCall, transferCall};
 
 sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
     #[derive(Debug)]
     IERC20,
-    "src/abi/IERC20.json"
+    "examples/abi/IERC20.json"
 );
 
 type ExternalContexts = ();
@@ -53,21 +51,19 @@ async fn main() -> anyhow::Result<()> {
 
     let cache_db: AlloyCacheDB = CacheDB::new(db);
 
-    let mut evm: Evm<ExternalContexts, AlloyCacheDB> = Evm::builder().with_db(cache_db).build();
+    let evm: Evm<ExternalContexts, AlloyCacheDB> = Evm::builder().with_db(cache_db).build();
 
     let address = address!("0b7007c13325c48911f73a2dad5fa5dcbf808adc");
 
-    let mut contract = Erc20Contract::new(address, &mut evm);
+    let mut contract = Erc20Contract::new(address, evm.into());
 
     let call = balanceOfCall {
         _owner: address!("c1eb47de5d549d45a871e32d9d082e7ac5d2e3ed"),
     };
 
-    let tx_env = TxEnv::default();
+    let balance = contract.balance_of(call, None)?.output.unwrap();
 
-    let v = contract.balance_of(call, tx_env);
-
-    dbg!(v);
+    dbg!(balance);
 
     Ok(())
 }
