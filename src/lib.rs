@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+
+use alloy::sol_types::SolCall;
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use quote::quote;
+use revm::primitives::{Account, Address, ExecutionResult, ResultAndState, TxEnv};
 use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input,
@@ -9,6 +13,8 @@ use syn::{
     Attribute, GenericParam, Generics, Ident, ItemStruct, Lifetime, Token, Type, TypeParam,
     Visibility,
 };
+mod types;
+use crate::types::CallOutput;
 
 /// Procedural macro to generate the contract struct with injected lifetimes and two type parameters
 #[proc_macro]
@@ -55,6 +61,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
             pub fn new(address: alloy::primitives::Address, evm: &'b mut Evm<'a, #type_param1, #type_param2>) -> Self {
                 Self { address, evm }
             }
+
         }
 
     };
@@ -75,33 +82,6 @@ pub fn calls(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Generate methods for each type in the calls list
     let mut methods = Vec::new();
-
-    for parsed_type in type_list.types {
-        // Convert the type to a token stream and then to a string
-        let type_tokens = quote!(#parsed_type);
-        let type_str = type_tokens.to_string();
-
-        // Remove "Call" from the end of the type name to create the method name
-        let method_name_str = if type_str.ends_with("Call") {
-            &type_str[..type_str.len() - 4] // Remove "Call"
-        } else {
-            &type_str
-        };
-
-        let method_name_str = method_name_str.to_snake_case();
-        // Convert the method name string to an Ident
-        let method_name = Ident::new(&method_name_str, parsed_type.span());
-
-        // Generate the method
-        let method = quote! {
-            pub fn #method_name(&self, call: #parsed_type) {
-                // Implement your method logic here
-                println!("Called {} with call: {:?}", stringify!(#method_name), call);
-            }
-        };
-
-        methods.push(method);
-    }
 
     // Extract lifetimes and type parameters from the struct's generics
     let (lifetimes, type_params) = extract_lifetimes_and_type_params(generics);
@@ -130,6 +110,45 @@ pub fn calls(attr: TokenStream, item: TokenStream) -> TokenStream {
     let lifetime_a = &lifetimes[1];
     let type_param1 = &type_params[0];
     let type_param2 = &type_params[1];
+
+    for parsed_type in type_list.types {
+        // Convert the type to a token stream and then to a string
+        let type_tokens = quote!(#parsed_type);
+        let type_str = type_tokens.to_string();
+
+        // Remove "Call" from the end of the type name to create the method name
+        let method_name_str = if type_str.ends_with("Call") {
+            &type_str[..type_str.len() - 4] // Remove "Call"
+        } else {
+            &type_str
+        };
+
+        let method_name_str = method_name_str.to_snake_case();
+        // Convert the method name string to an Ident
+        let method_name = Ident::new(&method_name_str, parsed_type.span());
+
+        // Generate the method
+        let method = quote! {
+
+            /// Note that the `tx_env` `data` & `transact_to` are provided by the implementation.
+            pub fn #method_name(&mut self, call: #parsed_type, tx_env: revm::primitives::TxEnv) -> revm::primitives::EVMResultGeneric<crate::types::CallOutput<#parsed_type>, #type_param2::Error> {
+
+                let mut tx_env = tx_env;
+
+                tx_env.data = call.abi_encode().into();
+                tx_env.transact_to = revm::primitives::TxKind::Call(self.address);
+
+                let tx = self.evm.tx_mut();
+                *tx = tx_env;
+
+                let result_and_state = self.evm.transact()?;
+
+                Ok(types::process_transact_result(result_and_state))
+            }
+        };
+
+        methods.push(method);
+    }
 
     // Generate generic parameters for the impl block
     let impl_generics = quote! { <#lifetime_b, #lifetime_a, #type_param1, #type_param2> };
